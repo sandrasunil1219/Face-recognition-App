@@ -1,0 +1,5 @@
+streamlit
+setuptools<81
+face-recognition
+numpy
+Pillow
