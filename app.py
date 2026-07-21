@@ -1,8 +1,7 @@
 import os
-import pickle
+import cv2
 import numpy as np
 import streamlit as st
-import face_recognition
 from PIL import Image
 
 # Set page config
@@ -99,36 +98,53 @@ st.markdown("""
 st.markdown("""
     <div class="title-container">
         <h1 class="main-title">Face Recognition Check</h1>
-        <p class="sub-title">Verify identity against saved face encodings in real-time</p>
+        <p class="sub-title">Real-time OpenCV face recognition against reference photo</p>
     </div>
 """, unsafe_allow_html=True)
 
-# Helper function to load encodings
-@st.cache_data
-def load_encodings(file_path):
-    if not os.path.exists(file_path):
-        return None, "File not found."
-    try:
-        with open(file_path, "rb") as f:
-            data = pickle.load(f)
-        return data, None
-    except Exception as e:
-        return None, str(e)
+REFERENCE_IMAGE_PATH = "person1.jpg.jpg"
 
-# Load database
-encodings_file = "face_encodings.pkl"
-data, err = load_encodings(encodings_file)
+@st.cache_resource
+def load_and_train_recognizer(image_path):
+    if not os.path.exists(image_path):
+        return None, None, f"Reference image '{image_path}' not found."
+    
+    ref_img = cv2.imread(image_path)
+    if ref_img is None:
+        return None, None, f"Unable to read reference image '{image_path}'."
+    
+    gray_ref = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY)
+    
+    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    face_cascade = cv2.CascadeClassifier(cascade_path)
+    if face_cascade.empty():
+        return None, None, "Failed to load Haar Cascade classifier."
+    
+    faces = face_cascade.detectMultiScale(gray_ref, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    if len(faces) == 0:
+        return None, None, f"No face detected in reference photo '{image_path}'."
+    
+    # Extract the largest face ROI
+    (x, y, w, h) = max(faces, key=lambda rect: rect[2] * rect[3])
+    ref_face_roi = gray_ref[y:y+h, x:x+w]
+    
+    # Create and train LBPH face recognizer
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer.train([ref_face_roi], np.array([1]))
+    
+    return recognizer, face_cascade, None
+
+recognizer, face_cascade, err = load_and_train_recognizer(REFERENCE_IMAGE_PATH)
 
 if err:
-    st.error(f"Error loading face encodings: {err}")
-    st.info("Please make sure `face_encodings.pkl` exists in the application directory.")
+    st.error(f"Initialization Error: {err}")
+    st.info(f"Please ensure `{REFERENCE_IMAGE_PATH}` exists in the repository root directory.")
 else:
     # Display system status card
-    known_name = data.get('name', 'Unknown')
-    st.markdown(f"""
+    st.markdown("""
         <div class="status-card">
             <h4 style="margin-top:0; color:#ff4b4b; font-size: 1.2rem;">Registered Target</h4>
-            <p style="margin-bottom:0; font-size: 1.1rem;">Scanning for: <strong>{known_name}</strong></p>
+            <p style="margin-bottom:0; font-size: 1.1rem;">Scanning for: <strong>Person1</strong></p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -139,55 +155,47 @@ else:
     if picture is not None:
         with st.spinner("Analyzing face..."):
             try:
-                # Load image
+                # Convert camera input to OpenCV BGR format
                 img = Image.open(picture)
-                img_array = np.array(img)
+                img_np = np.array(img)
                 
-                # Convert to RGB (face_recognition expects RGB)
-                if img_array.shape[-1] == 4:
-                    img_array = img_array[:, :, :3]
+                if len(img_np.shape) == 3 and img_np.shape[2] == 4:
+                    img_np = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
+                elif len(img_np.shape) == 3 and img_np.shape[2] == 3:
+                    img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
                 
-                # Find face encodings
-                face_locations = face_recognition.face_locations(img_array)
+                gray_captured = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
                 
-                if not face_locations:
+                # Detect faces in captured frame
+                faces = face_cascade.detectMultiScale(gray_captured, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                
+                if len(faces) == 0:
                     st.warning("No face detected in the photo. Please adjust lighting and try again.")
                 else:
-                    # Encode captured face
-                    captured_encodings = face_recognition.face_encodings(img_array, face_locations)
+                    # Select largest face ROI
+                    (x, y, w, h) = max(faces, key=lambda rect: rect[2] * rect[3])
+                    captured_roi = gray_captured[y:y+h, x:x+w]
                     
-                    if captured_encodings:
-                        known_encoding = data['encoding']
-                        
-                        # Compare face encodings
-                        matches = face_recognition.compare_faces([known_encoding], captured_encodings[0], tolerance=0.6)
-                        # Compute distance to show confidence
-                        face_distances = face_recognition.face_distance([known_encoding], captured_encodings[0])
-                        distance = face_distances[0]
-                        
-                        # Convert distance to a percentage-like confidence score
-                        if distance < 0.6:
-                            confidence = (1 - distance / 1.2) * 100 # Maps 0.0 -> 100%, 0.6 -> 50%
-                        else:
-                            confidence = (1 - distance) * 100
-                            confidence = max(0.0, min(49.9, confidence))
-                        
-                        if matches[0]:
-                            st.markdown(f"""
-                                <div class="result-container result-match">
-                                    <p class="result-text">Match: {known_name}</p>
-                                    <p class="confidence-text">Confidence Score: {confidence:.1f}% (Distance: {distance:.3f})</p>
-                                </div>
-                            """, unsafe_allow_html=True)
-                            st.balloons()
-                        else:
-                            st.markdown(f"""
-                                <div class="result-container result-no-match">
-                                    <p class="result-text">No match found</p>
-                                    <p class="confidence-text">Similarity score too low (Distance: {distance:.3f})</p>
-                                </div>
-                            """, unsafe_allow_html=True)
+                    label, confidence = recognizer.predict(captured_roi)
+                    
+                    # LBPH distance: lower is better match (0 = perfect match)
+                    # A threshold around 75 is standard for LBPH recognizers
+                    CONFIDENCE_THRESHOLD = 75.0
+                    
+                    if confidence < CONFIDENCE_THRESHOLD:
+                        st.markdown(f"""
+                            <div class="result-container result-match">
+                                <p class="result-text">Match: Person1</p>
+                                <p class="confidence-text">Confidence Distance: {confidence:.1f}</p>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        st.balloons()
                     else:
-                        st.warning("Failed to extract face features. Please try again.")
+                        st.markdown(f"""
+                            <div class="result-container result-no-match">
+                                <p class="result-text">No match found</p>
+                                <p class="confidence-text">Confidence Distance: {confidence:.1f}</p>
+                            </div>
+                        """, unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"An error occurred during processing: {str(e)}")

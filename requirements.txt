@@ -1,7 +1,4 @@
 streamlit
-setuptools<81
-cmake
-dlib
-face_recognition
+opencv-contrib-python-headless
 numpy
 Pillow
