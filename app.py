@@ -115,10 +115,20 @@ def load_and_train_recognizer(image_path):
     
     gray_ref = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY)
     
-    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    # Load Haar Cascade classifier using cv2.data.haarcascades
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    if not os.path.exists(cascade_path) and os.path.exists("haarcascade_frontalface_default.xml"):
+        cascade_path = "haarcascade_frontalface_default.xml"
+        
     face_cascade = cv2.CascadeClassifier(cascade_path)
+    
+    # Fallback check if default path yielded empty classifier
+    if face_cascade.empty() and os.path.exists("haarcascade_frontalface_default.xml"):
+        cascade_path = "haarcascade_frontalface_default.xml"
+        face_cascade = cv2.CascadeClassifier(cascade_path)
+        
     if face_cascade.empty():
-        return None, None, "Failed to load Haar Cascade classifier."
+        raise RuntimeError(f"Failed to load Haar Cascade classifier from path: {cascade_path}")
     
     faces = face_cascade.detectMultiScale(gray_ref, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
     if len(faces) == 0:
@@ -179,7 +189,6 @@ else:
                     label, confidence = recognizer.predict(captured_roi)
                     
                     # LBPH distance: lower is better match (0 = perfect match)
-                    # A threshold around 75 is standard for LBPH recognizers
                     CONFIDENCE_THRESHOLD = 75.0
                     
                     if confidence < CONFIDENCE_THRESHOLD:
